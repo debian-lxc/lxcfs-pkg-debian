@@ -1,5 +1,6 @@
 lxcfs (0.1-0ubuntu1) UNRELEASED; urgency=low
 
   * Initial release.
+  * Cherry-pick testsuite bugfix from upstream.
 
  -- Stéphane Graber <stgraber@ubuntu.com>  Mon, 12 Jan 2015 13:31:16 -0500

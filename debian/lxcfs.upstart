@@ -1,0 +1,9 @@
+description "FUSE filesystem for LXC"
+author "Stéphane Graber <stgraber@ubuntu.com>"
+
+respawn
+
+start on started cgmanager and starting lxc
+stop on runlevel [06]
+
+exec /usr/bin/lxcfs -s -f -o allow_other /var/lib/lxcfs

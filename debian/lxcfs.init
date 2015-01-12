@@ -21,11 +21,14 @@ test -f ${DAEMON} || exit 0
 
 set -e
 
-START="--start --quiet --pidfile ${PIDFILE} --name ${NAME} --startas $DAEMON --background"
+START="-m --start --quiet --pidfile ${PIDFILE} --name ${NAME} --startas $DAEMON --background"
 case "$1" in
     start)
+        if init_is_upstart; then
+            exit 1
+        fi
         echo -n "Starting $DESC: "
-        if start-stop-daemon ${START} >/dev/null 2>&1 ; then
+        if start-stop-daemon ${START} -- -f -s -o allow_other /var/lib/lxcfs >/dev/null 2>&1 ; then
             echo "${NAME}."
         else
             if start-stop-daemon --test ${START} >/dev/null 2>&1; then
@@ -41,6 +44,9 @@ case "$1" in
     ;;
 
     stop)
+        if init_is_upstart; then
+            exit 0
+        fi
         echo -n "Stopping $DESC: "
         if start-stop-daemon --stop --quiet --pidfile ${PIDFILE} \
             --startas ${DAEMON} --retry 10 --name ${NAME} \
@@ -60,10 +66,16 @@ case "$1" in
     ;;
 
     status)
+        if init_is_upstart; then
+            exit 0
+        fi
         status_of_proc -p ${PIDFILE} "${DAEMON}" lxcfs
     ;;
 
     restart|force-reload)
+        if init_is_upstart; then
+            exit 1
+        fi
         $0 stop
         exec $0 start
     ;;

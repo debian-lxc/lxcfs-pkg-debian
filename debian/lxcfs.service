@@ -6,7 +6,7 @@ After=local-fs.target cgmanager.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/lxcfs -s -f -o allow_other /var/lib/lxcfs/
+ExecStart=/usr/bin/lxcfs -s -o allow_other /var/lib/lxcfs/
 KillMode=process
 Restart=on-failure
 

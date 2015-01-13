@@ -1,8 +1,8 @@
-lxcfs (0.1-0ubuntu2) UNRELEASED; urgency=medium
+lxcfs (0.1-0ubuntu2) vivid; urgency=medium
 
   * Add test dependency on lxc.
 
- -- Stéphane Graber <stgraber@ubuntu.com>  Tue, 13 Jan 2015 10:27:44 -0500
+ -- Stéphane Graber <stgraber@ubuntu.com>  Tue, 13 Jan 2015 10:28:12 -0500
 
 lxcfs (0.1-0ubuntu1) vivid; urgency=low
 

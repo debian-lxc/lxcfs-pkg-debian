@@ -1,8 +1,8 @@
-lxcfs (0.1-0ubuntu3) UNRELEASED; urgency=medium
+lxcfs (0.1-0ubuntu3) vivid; urgency=medium
 
   * Fix the upstart and systemd init scripts. (LP: #1410666)
 
- -- Stéphane Graber <stgraber@ubuntu.com>  Wed, 14 Jan 2015 10:28:52 -0500
+ -- Stéphane Graber <stgraber@ubuntu.com>  Wed, 14 Jan 2015 10:29:28 -0500
 
 lxcfs (0.1-0ubuntu2) vivid; urgency=medium
 

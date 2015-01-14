@@ -9,7 +9,7 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 #export DH_VERBOSE=1
 
 %:
-	dh $@  --with autotools_dev --with autoreconf
+	dh $@  --with autotools_dev --with autoreconf --with systemd
 
 override_dh_autoreconf:
 	[ -e m4 ] || mkdir m4

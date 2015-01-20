@@ -1,10 +1,10 @@
-lxcfs (0.2-0ubuntu1) UNRELEASED; urgency=medium
+lxcfs (0.2-0ubuntu1) vivid; urgency=medium
 
   * New upstream release (0.2):
     - Add a LXC hook and config snippet
     - Fix the testsuite
 
- -- Stéphane Graber <stgraber@ubuntu.com>  Tue, 20 Jan 2015 15:16:14 -0500
+ -- Stéphane Graber <stgraber@ubuntu.com>  Tue, 20 Jan 2015 15:17:21 -0500
 
 lxcfs (0.1-0ubuntu3) vivid; urgency=medium
 

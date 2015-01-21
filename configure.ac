@@ -1,7 +1,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.61)
-AC_INIT([lxcfs], [0.2], [lxc-devel@lists.linuxcontainers.org])
+AC_INIT([lxcfs], [0.3], [lxc-devel@lists.linuxcontainers.org])
 AC_SUBST(ACLOCAL_AMFLAGS, "-I m4")
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -31,7 +31,7 @@ AC_PATH_PROG(HELP2MAN, help2man, false // No help2man //)
 AM_CONDITIONAL([HAVE_HELP2MAN], [test "x$HELP2MAN" != "xfalse // No help2man //" ])
 
 AS_AC_EXPAND(LXCFSSHAREDIR, "$datarootdir/lxcfs")
-AS_AC_EXPAND(LXCCONFDIR, "$datarootdir/lxc/common.conf.d")
+AS_AC_EXPAND(LXCCONFDIR, "$datarootdir/lxc/config/common.conf.d")
 AS_AC_EXPAND(LXCFSTARGETDIR, "$localstatedir/lib/lxcfs")
 
 AC_OUTPUT

@@ -1,3 +1,11 @@
+lxcfs (0.4-0ubuntu1) UNRELEASED; urgency=medium
+
+  * New upstream release (0.4):
+    - Fix a critical bug where the host's /proc could be replaced by the
+      container's on systems where / is mounted rshared (default with systemd).
+
+ -- Stéphane Graber <stgraber@ubuntu.com>  Fri, 23 Jan 2015 13:52:46 -0500
+
 lxcfs (0.3-0ubuntu1) vivid; urgency=medium
 
   * New upstream release (0.3):

@@ -12,7 +12,9 @@ Build-Depends:
         libfuse-dev,
         pkg-config,
 Standards-Version: 3.9.5
-Homepage: https://linuxcontainers.org/lxcfs
+Homepage: https://linuxcontainers.org
+Vcs-Git: git://github.com/lxc/lxcfs-pkg-ubuntu
+Vcs-Browser: https://github.com/lxc/lxcfs-pkg-ubuntu
 XS-Testsuite: autopkgtest
 
 Package: lxcfs

@@ -1,3 +1,13 @@
+lxcfs (0.5-0ubuntu1) UNRELEASED; urgency=medium
+
+  * New upstream release (0.5):
+    - Fix LXC hook to stop messing with /etc/mtab
+    - Fix LXC hook to succeed even if /proc and /sys aren't mounted
+    - Update configure.ac to properly detect the cgmanager version
+  * Update init scripts to properly cleanup on crashes.
+
+ -- Stéphane Graber <stgraber@ubuntu.com>  Wed, 28 Jan 2015 17:06:46 +0100
+
 lxcfs (0.4-0ubuntu1) vivid; urgency=medium
 
   * New upstream release (0.4):

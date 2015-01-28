@@ -27,6 +27,11 @@ case "$1" in
         if init_is_upstart; then
             exit 1
         fi
+
+        # Cleanup in case of crash
+        fusermount -u /var/lib/lxcfs 2> /dev/null || true
+        sed -i "/^lxcfs \/var\/lib\/lxcfs fuse.lxcfs/d" /etc/mtab
+
         echo -n "Starting $DESC: "
         if start-stop-daemon ${START} -- -f -s -o allow_other /var/lib/lxcfs >/dev/null 2>&1 ; then
             echo "${NAME}."

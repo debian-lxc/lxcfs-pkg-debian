@@ -9,6 +9,8 @@ Requires=cgmanager.service
 ExecStart=/usr/bin/lxcfs -f -s -o allow_other /var/lib/lxcfs/
 KillMode=process
 Restart=on-failure
+ExecStopPost=-/bin/fusermount -u /var/lib/lxcfs
+ExecStopPost=/bin/sed -i "/^lxcfs \/var\/lib\/lxcfs fuse.lxcfs/d" /etc/mtab
 
 [Install]
 WantedBy=multi-user.target

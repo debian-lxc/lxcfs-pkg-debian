@@ -1,7 +1,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.61)
-AC_INIT([lxcfs], [0.4], [lxc-devel@lists.linuxcontainers.org])
+AC_INIT([lxcfs], [0.5], [lxc-devel@lists.linuxcontainers.org])
 AC_SUBST(ACLOCAL_AMFLAGS, "-I m4")
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -26,6 +26,8 @@ PKG_CHECK_MODULES([NIH_DBUS], [libnih-dbus >= 1.0.0])
 PKG_CHECK_MODULES([DBUS], [dbus-1 >= 1.2.16])
 PKG_CHECK_MODULES([CGMANAGER], [libcgmanager >= 0.0.0])
 PKG_CHECK_MODULES(FUSE, fuse)
+AC_CHECK_LIB(cgmanager, cgmanager_list_controllers_sync, [], AC_MSG_ERROR(["cgmanager 0.35 or higher is required"]))
+AC_CHECK_LIB(cgmanager, cgmanager_list_keys_sync, [], AC_MSG_ERROR(["cgmanager 0.35 or higher is required"]))
 
 AC_PATH_PROG(HELP2MAN, help2man, false // No help2man //)
 AM_CONDITIONAL([HAVE_HELP2MAN], [test "x$HELP2MAN" != "xfalse // No help2man //" ])

@@ -1,7 +1,7 @@
 Source: lxcfs
 Section: admin
 Priority: optional
-Maintainer: Stéphane Graber <stgraber@ubuntu.com>
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 Build-Depends:
         autotools-dev,
         debhelper (>= 9),

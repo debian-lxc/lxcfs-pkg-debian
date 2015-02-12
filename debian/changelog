@@ -1,3 +1,11 @@
+lxcfs (0.5-0ubuntu3) UNRELEASED; urgency=medium
+
+  * Add the symlink check to the sysvinit script.
+  * Don't start lxcfs if /var/lib/lxcfs/proc exists as that typically
+    means we've had it bind-mounted from the host.
+
+ -- Stéphane Graber <stgraber@ubuntu.com>  Thu, 12 Feb 2015 13:41:45 -0500
+
 lxcfs (0.5-0ubuntu2) vivid; urgency=medium
 
   * debian/lxcfs.service: Drop seddery of /etc/mtab, which turns /etc/mtab

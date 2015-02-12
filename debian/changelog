@@ -1,3 +1,13 @@
+lxcfs (0.5-0ubuntu2) vivid; urgency=medium
+
+  * debian/lxcfs.service: Drop seddery of /etc/mtab, which turns /etc/mtab
+    into a file. Under systemd, /etc/mtab is always a symlink to /proc/mounts.
+    (LP: #1419623)
+  * debian/lxcfs.upstart: Don't sed /etc/mtab if it is a symlink, to avoid
+    reverting it back to a file if it was changed to be a symlink.
+
+ -- Martin Pitt <martin.pitt@ubuntu.com>  Thu, 12 Feb 2015 10:41:57 +0100
+
 lxcfs (0.5-0ubuntu1) vivid; urgency=medium
 
   * New upstream release (0.5):

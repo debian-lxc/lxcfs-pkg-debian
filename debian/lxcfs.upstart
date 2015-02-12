@@ -11,5 +11,5 @@ exec /usr/bin/lxcfs -s -f -o allow_other /var/lib/lxcfs
 post-stop script
     # Cleanup in case of crash
     fusermount -u /var/lib/lxcfs 2> /dev/null || true
-    sed -i "/^lxcfs \/var\/lib\/lxcfs fuse.lxcfs/d" /etc/mtab
+    [ -L /etc/mtab ] || sed -i "/^lxcfs \/var\/lib\/lxcfs fuse.lxcfs/d" /etc/mtab
 end script

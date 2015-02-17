@@ -1,3 +1,11 @@
+lxcfs (0.6-0ubuntu1) UNRELEASED; urgency=medium
+
+  * New upstream release (0.6):
+    - Fix cleanup for several function (missing close/free)
+    - Fix cpu-average in /proc/stat
+
+ -- Stéphane Graber <stgraber@ubuntu.com>  Mon, 16 Feb 2015 23:13:24 -0500
+
 lxcfs (0.5-0ubuntu3) vivid; urgency=medium
 
   * Add the symlink check to the sysvinit script.

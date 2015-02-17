@@ -1,0 +1,26 @@
+From 1272e278a5b83de5e21c53ed0ea8aeb2e46daebb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?St=C3=A9phane=20Graber?= <stgraber@ubuntu.com>
+Date: Mon, 16 Feb 2015 23:42:33 -0500
+Subject: Fix test_proc following the stat fix
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Stéphane Graber <stgraber@ubuntu.com>
+---
+ tests/test_proc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tests/test_proc b/tests/test_proc
+index 0c42892..4ed47d7 100755
+--- a/tests/test_proc
++++ b/tests/test_proc
+@@ -28,7 +28,7 @@ cgm setvalue cpuset $(cgm getpidcgroupabs cpuset $$) \
+ grep -q "^processor.*0$" /var/lib/lxcfs/proc/cpuinfo
+ 
+ # Test stat
+-[ "$(grep "^cpu" /var/lib/lxcfs/proc/stat | wc -l)" = "1" ]
++[ "$(grep "^cpu" /var/lib/lxcfs/proc/stat | wc -l)" = "2" ]
+ 
+ # Test meminfo
+ grep -q "^MemTotal.*1024 kB$" /var/lib/lxcfs/proc/meminfo

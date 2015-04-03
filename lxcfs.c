@@ -620,7 +620,7 @@ static int cg_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
 	}
 
 	// now get the list of child cgroups
-	nih_local char **clist;
+	nih_local char **clist = NULL;
 
 	if (!cgm_list_children(controller, cgroup, &clist))
 		return 0;
@@ -689,7 +689,7 @@ static int msgrecv(int sockfd, void *buf, size_t len)
 	tv.tv_sec = 2;
 	tv.tv_usec = 0;
 
-	if (select(sockfd+1, &rfds, NULL, NULL, &tv) < 0)
+	if (select(sockfd+1, &rfds, NULL, NULL, &tv) <= 0)
 		return -1;
 	return recv(sockfd, buf, len, MSG_DONTWAIT);
 }
@@ -752,6 +752,8 @@ static bool recv_creds(int sock, struct ucred *cred, char *v)
 	char buf[1];
 	int ret;
 	int optval = 1;
+	struct timeval tv;
+	fd_set rfds;
 
 	*v = '1';
 
@@ -779,10 +781,16 @@ static bool recv_creds(int sock, struct ucred *cred, char *v)
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
 
-	// retry logic is not ideal, especially as we are not
-	// threaded.  Sleep at most 1 second waiting for the client
-	// to send us the scm_cred
-	ret = recvmsg(sock, &msg, 0);
+	FD_ZERO(&rfds);
+	FD_SET(sock, &rfds);
+	tv.tv_sec = 2;
+	tv.tv_usec = 0;
+	if (select(sock+1, &rfds, NULL, NULL, &tv) <= 0) {
+		fprintf(stderr, "Failed to select for scm_cred: %s\n",
+			  strerror(errno));
+		return false;
+	}
+	ret = recvmsg(sock, &msg, MSG_DONTWAIT);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to receive scm_cred: %s\n",
 			  strerror(errno));
@@ -829,9 +837,12 @@ static void pid_to_ns(int sock, pid_t tpid)
  */
 static void pid_to_ns_wrapper(int sock, pid_t tpid)
 {
-	int newnsfd = -1;
+	int newnsfd = -1, ret, cpipe[2];
 	char fnam[100];
 	pid_t cpid;
+	struct timeval tv;
+	fd_set s;
+	char v;
 
 	sprintf(fnam, "/proc/%d/ns/pid", tpid);
 	newnsfd = open(fnam, O_RDONLY);
@@ -841,15 +852,46 @@ static void pid_to_ns_wrapper(int sock, pid_t tpid)
 		exit(1);
 	close(newnsfd);
 
-	cpid = fork();
+	if (pipe(cpipe) < 0)
+		exit(1);
 
+loop:
+	cpid = fork();
 	if (cpid < 0)
 		exit(1);
-	if (!cpid)
+
+	if (!cpid) {
+		char b = '1';
+		close(cpipe[0]);
+		if (write(cpipe[1], &b, sizeof(char)) < 0) {
+			fprintf(stderr, "%s (child): erorr on write: %s\n",
+				__func__, strerror(errno));
+		}
+		close(cpipe[1]);
 		pid_to_ns(sock, tpid);
+	}
+	// give the child 1 second to be done forking and
+	// write it's ack
+	FD_ZERO(&s);
+	FD_SET(cpipe[0], &s);
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	ret = select(cpipe[0]+1, &s, NULL, NULL, &tv);
+	if (ret <= 0)
+		goto again;
+	ret = read(cpipe[0], &v, 1);
+	if (ret != sizeof(char) || v != '1') {
+		goto again;
+	}
+
 	if (!wait_for_pid(cpid))
 		exit(1);
 	exit(0);
+
+again:
+	kill(cpid, SIGKILL);
+	wait_for_pid(cpid);
+	goto loop;
 }
 
 /*
@@ -905,16 +947,17 @@ static bool do_read_pids(pid_t tpid, const char *contrl, const char *cg, const c
 		// read converted results
 		FD_ZERO(&s);
 		FD_SET(sock[0], &s);
-		tv.tv_sec = 1;
+		tv.tv_sec = 2;
 		tv.tv_usec = 0;
 		ret = select(sock[0]+1, &s, NULL, NULL, &tv);
 		if (ret <= 0) {
-			kill(cpid, SIGTERM);
+			fprintf(stderr, "%s: select error waiting for pid from child: %s\n",
+				__func__, strerror(errno));
 			goto out;
 		}
 		if (read(sock[0], &qpid, sizeof(qpid)) != sizeof(qpid)) {
-			kill(cpid, SIGTERM);
-			perror("read");
+			fprintf(stderr, "%s: error reading pid from child: %s\n",
+				__func__, strerror(errno));
 			goto out;
 		}
 		NIH_MUST( nih_strcat_sprintf(d, NULL, "%d\n", qpid) );
@@ -929,7 +972,8 @@ next:
 	v = '1';
 	if (send_creds(sock[0], &cred, v, true) != SEND_CREDS_OK) {
 		// failed to ask child to exit
-		kill(cpid, SIGTERM);
+		fprintf(stderr, "%s: failed to ask child to exit: %s\n",
+			__func__, strerror(errno));
 		goto out;
 	}
 
@@ -1016,10 +1060,28 @@ static void pid_from_ns(int sock, pid_t tpid)
 	pid_t vpid;
 	struct ucred cred;
 	char v;
+	struct timeval tv;
+	fd_set s;
+	int ret;
 
 	cred.uid = 0;
 	cred.gid = 0;
-	while (read(sock, &vpid, sizeof(pid_t)) == sizeof(pid_t)) {
+	while (1) {
+		FD_ZERO(&s);
+		FD_SET(sock, &s);
+		tv.tv_sec = 2;
+		tv.tv_usec = 0;
+		ret = select(sock+1, &s, NULL, NULL, &tv);
+		if (ret <= 0) {
+			fprintf(stderr, "%s: bad select before read from parent: %s\n",
+				__func__, strerror(errno));
+			exit(1);
+		}
+		if ((ret = read(sock, &vpid, sizeof(pid_t))) != sizeof(pid_t)) {
+			fprintf(stderr, "%s: bad read from parent: %s\n",
+				__func__, strerror(errno));
+			exit(1);
+		}
 		if (vpid == -1) // done
 			break;
 		v = '0';
@@ -1036,9 +1098,12 @@ static void pid_from_ns(int sock, pid_t tpid)
 
 static void pid_from_ns_wrapper(int sock, pid_t tpid)
 {
-	int newnsfd = -1;
+	int newnsfd = -1, ret, cpipe[2];
 	char fnam[100];
 	pid_t cpid;
+	fd_set s;
+	struct timeval tv;
+	char v;
 
 	sprintf(fnam, "/proc/%d/ns/pid", tpid);
 	newnsfd = open(fnam, O_RDONLY);
@@ -1048,15 +1113,48 @@ static void pid_from_ns_wrapper(int sock, pid_t tpid)
 		exit(1);
 	close(newnsfd);
 
+	if (pipe(cpipe) < 0)
+		exit(1);
+
+loop:
 	cpid = fork();
 
 	if (cpid < 0)
 		exit(1);
-	if (!cpid)
+
+	if (!cpid) {
+		char b = '1';
+		close(cpipe[0]);
+		if (write(cpipe[1], &b, sizeof(char)) < 0) {
+			fprintf(stderr, "%s (child): erorr on write: %s\n",
+				__func__, strerror(errno));
+		}
+		close(cpipe[1]);
 		pid_from_ns(sock, tpid);
+	}
+
+	// give the child 1 second to be done forking and
+	// write it's ack
+	FD_ZERO(&s);
+	FD_SET(cpipe[0], &s);
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	ret = select(cpipe[0]+1, &s, NULL, NULL, &tv);
+	if (ret <= 0)
+		goto again;
+	ret = read(cpipe[0], &v, 1);
+	if (ret != sizeof(char) || v != '1') {
+		goto again;
+	}
+
 	if (!wait_for_pid(cpid))
 		exit(1);
 	exit(0);
+
+again:
+	kill(cpid, SIGKILL);
+	wait_for_pid(cpid);
+	goto loop;
 }
 
 static bool do_write_pids(pid_t tpid, const char *contrl, const char *cg, const char *file, const char *buf)
@@ -1087,8 +1185,8 @@ static bool do_write_pids(pid_t tpid, const char *contrl, const char *cg, const 
 		char v;
 
 		if (write(sock[0], &qpid, sizeof(qpid)) != sizeof(qpid)) {
-			kill(cpid, SIGTERM);
-			perror("write");
+			fprintf(stderr, "%s: error writing pid to child: %s\n",
+				__func__, strerror(errno));
 			goto out;
 		}
 
@@ -1393,6 +1491,29 @@ static void get_mem_cached(char *memstat, unsigned long *v)
 		if (!eol)
 			return;
 		memstat = eol+1;
+	}
+}
+
+static void get_blkio_io_value(char *str, unsigned major, unsigned minor, char *iotype, unsigned long *v)
+{   
+	char *eol;
+	char key[32];
+	
+	memset(key, 0, 32);
+	snprintf(key, 32, "%u:%u %s", major, minor, iotype);
+	
+	size_t len = strlen(key);
+	*v = 0;
+
+	while (*str) {
+		if (startswith(str, key)) {
+ 			sscanf(str + len, "%lu", v);
+ 			return;
+ 		}
+ 		eol = strchr(str, '\n');
+		if (!eol)
+ 			return;
+		str = eol+1;
 	}
 }
 
@@ -1719,10 +1840,12 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 static long int get_pid1_time(pid_t pid)
 {
 	char fnam[100];
-	int fd;
+	int fd, cpipe[2], ret;
 	struct stat sb;
-	int ret;
-	pid_t npid;
+	pid_t cpid;
+	struct timeval tv;
+	fd_set s;
+	char v;
 
 	if (unshare(CLONE_NEWNS))
 		return 0;
@@ -1744,28 +1867,57 @@ static long int get_pid1_time(pid_t pid)
 		return 0;
 	}
 	close(fd);
-	npid = fork();
-	if (npid < 0)
+
+	if (pipe(cpipe) < 0)
+		exit(1);
+
+loop:
+	cpid = fork();
+	if (cpid < 0)
 		return 0;
 
-	if (npid) {
-		// child will do the writing for us
-		wait_for_pid(npid);
-		exit(0);
+	if (!cpid) {
+		char b = '1';
+		close(cpipe[0]);
+		if (write(cpipe[1], &b, sizeof(char)) < 0) {
+			fprintf(stderr, "%s (child): erorr on write: %s\n",
+				__func__, strerror(errno));
+		}
+		close(cpipe[1]);
+		umount2("/proc", MNT_DETACH);
+		if (mount("proc", "/proc", "proc", 0, NULL)) {
+			perror("get_pid1_time mount");
+			return 0;
+		}
+		ret = lstat("/proc/1", &sb);
+		if (ret) {
+			perror("get_pid1_time lstat");
+			return 0;
+		}
+		return time(NULL) - sb.st_ctime;
 	}
 
-	umount2("/proc", MNT_DETACH);
+	// give the child 1 second to be done forking and
+	// write it's ack
+	FD_ZERO(&s);
+	FD_SET(cpipe[0], &s);
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	ret = select(cpipe[0]+1, &s, NULL, NULL, &tv);
+	if (ret <= 0)
+		goto again;
+	ret = read(cpipe[0], &v, 1);
+	if (ret != sizeof(char) || v != '1') {
+		goto again;
+	}
 
-	if (mount("proc", "/proc", "proc", 0, NULL)) {
-		perror("get_pid1_time mount");
-		return 0;
-	}
-	ret = lstat("/proc/1", &sb);
-	if (ret) {
-		perror("get_pid1_time lstat");
-		return 0;
-	}
-	return time(NULL) - sb.st_ctime;
+	wait_for_pid(cpid);
+	exit(0);
+
+again:
+	kill(cpid, SIGKILL);
+	wait_for_pid(cpid);
+	goto loop;
 }
 
 static long int getreaperage(pid_t qpid)
@@ -1794,7 +1946,7 @@ static long int getreaperage(pid_t qpid)
 	tv.tv_sec = 1;
 	tv.tv_usec = 0;
 	ret = select(mypipe[0]+1, &s, NULL, NULL, &tv);
-	if (ret == -1) {
+	if (ret <= 0) {
 		perror("select");
 		goto out;
 	}
@@ -1845,6 +1997,101 @@ static int proc_uptime_read(char *buf, size_t size, off_t offset,
 	return snprintf(buf, size, "%ld %ld\n", reaperage, idletime);
 }
 
+static int proc_diskstats_read(char *buf, size_t size, off_t offset,
+		struct fuse_file_info *fi)
+{
+	char dev_name[72];
+	struct fuse_context *fc = fuse_get_context();
+	nih_local char *cg = get_pid_cgroup(fc->pid, "blkio");
+	nih_local char *io_serviced_str = NULL, *io_merged_str = NULL, *io_service_bytes_str = NULL,
+			*io_wait_time_str = NULL, *io_service_time_str = NULL;
+	unsigned long read = 0, write = 0;
+	unsigned long read_merged = 0, write_merged = 0;
+	unsigned long read_sectors = 0, write_sectors = 0;
+	unsigned long read_ticks = 0, write_ticks = 0;
+	unsigned long ios_pgr = 0, tot_ticks = 0, rq_ticks = 0;
+	unsigned long rd_svctm = 0, wr_svctm = 0, rd_wait = 0, wr_wait = 0;
+	char *line = NULL;
+	size_t linelen = 0, total_len = 0;
+	unsigned int major = 0, minor = 0;
+	int i = 0;
+	FILE *f;
+
+	if (offset)
+		return -EINVAL;
+
+	if (!cg)
+		return 0;
+
+	if (!cgm_get_value("blkio", cg, "blkio.io_serviced", &io_serviced_str))
+		return 0;
+	if (!cgm_get_value("blkio", cg, "blkio.io_merged", &io_merged_str))
+		return 0;
+	if (!cgm_get_value("blkio", cg, "blkio.io_service_bytes", &io_service_bytes_str))
+		return 0;
+	if (!cgm_get_value("blkio", cg, "blkio.io_wait_time", &io_wait_time_str))
+		return 0;
+	if (!cgm_get_value("blkio", cg, "blkio.io_service_time", &io_service_time_str))
+		return 0;
+
+
+	f = fopen("/proc/diskstats", "r");
+	if (!f)
+		return 0;
+
+	while (getline(&line, &linelen, f) != -1) {
+		size_t l;
+		char *printme, lbuf[256];
+
+		i = sscanf(line, "%u %u %s", &major, &minor, dev_name);
+		if(i == 3){
+			get_blkio_io_value(io_serviced_str, major, minor, "Read", &read);
+			get_blkio_io_value(io_serviced_str, major, minor, "Write", &write);
+			get_blkio_io_value(io_merged_str, major, minor, "Read", &read_merged);
+			get_blkio_io_value(io_merged_str, major, minor, "Write", &write_merged);
+			get_blkio_io_value(io_service_bytes_str, major, minor, "Read", &read_sectors);
+			read_sectors = read_sectors/512;
+			get_blkio_io_value(io_service_bytes_str, major, minor, "Write", &write_sectors);
+			write_sectors = write_sectors/512;
+			
+			get_blkio_io_value(io_service_time_str, major, minor, "Read", &rd_svctm);
+			rd_svctm = rd_svctm/1000000;
+			get_blkio_io_value(io_wait_time_str, major, minor, "Read", &rd_wait);
+			rd_wait = rd_wait/1000000;
+			read_ticks = rd_svctm + rd_wait;
+
+			get_blkio_io_value(io_service_time_str, major, minor, "Write", &wr_svctm);
+			wr_svctm =  wr_svctm/1000000;
+			get_blkio_io_value(io_wait_time_str, major, minor, "Write", &wr_wait);
+			wr_wait =  wr_wait/1000000;
+			write_ticks = wr_svctm + wr_wait;
+
+			get_blkio_io_value(io_service_time_str, major, minor, "Total", &tot_ticks);
+			tot_ticks =  tot_ticks/1000000;
+		}else{
+			continue;
+		}
+
+		memset(lbuf, 0, 256);
+		if (read || write || read_merged || write_merged || read_sectors || write_sectors || read_ticks || write_ticks) {
+			snprintf(lbuf, 256, "%u       %u %s %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n", 
+				major, minor, dev_name, read, read_merged, read_sectors, read_ticks,
+				write, write_merged, write_sectors, write_ticks, ios_pgr, tot_ticks, rq_ticks);
+			printme = lbuf;
+		} else
+			continue;
+
+		l = snprintf(buf, size, "%s", printme);
+		buf += l;
+		size -= l;
+		total_len += l;
+	}
+
+	fclose(f);
+	free(line);
+	return total_len;
+}
+
 static off_t get_procfile_size(const char *which)
 {
 	FILE *f = fopen(which, "r");
@@ -1879,8 +2126,8 @@ static int proc_getattr(const char *path, struct stat *sb)
 	if (strcmp(path, "/proc/meminfo") == 0 ||
 			strcmp(path, "/proc/cpuinfo") == 0 ||
 			strcmp(path, "/proc/uptime") == 0 ||
-			strcmp(path, "/proc/stat") == 0) {
-
+			strcmp(path, "/proc/stat") == 0 ||
+			strcmp(path, "/proc/diskstats") == 0) {
 		sb->st_size = get_procfile_size(path);
 		sb->st_mode = S_IFREG | 00444;
 		sb->st_nlink = 1;
@@ -1896,7 +2143,8 @@ static int proc_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 	if (filler(buf, "cpuinfo", NULL, 0) != 0 ||
 				filler(buf, "meminfo", NULL, 0) != 0 ||
 				filler(buf, "stat", NULL, 0) != 0 ||
-				filler(buf, "uptime", NULL, 0) != 0)
+				filler(buf, "uptime", NULL, 0) != 0 ||
+				filler(buf, "diskstats", NULL, 0) != 0)
 		return -EINVAL;
 	return 0;
 }
@@ -1906,7 +2154,8 @@ static int proc_open(const char *path, struct fuse_file_info *fi)
 	if (strcmp(path, "/proc/meminfo") == 0 ||
 			strcmp(path, "/proc/cpuinfo") == 0 ||
 			strcmp(path, "/proc/uptime") == 0 ||
-			strcmp(path, "/proc/stat") == 0)
+			strcmp(path, "/proc/stat") == 0 || 
+			strcmp(path, "/proc/diskstats") == 0)
 		return 0;
 	return -ENOENT;
 }
@@ -1922,6 +2171,8 @@ static int proc_read(const char *path, char *buf, size_t size, off_t offset,
 		return proc_uptime_read(buf, size, offset, fi);
 	if (strcmp(path, "/proc/stat") == 0)
 		return proc_stat_read(buf, size, offset, fi);
+	if (strcmp(path, "/proc/diskstats") == 0)
+		return proc_diskstats_read(buf, size, offset, fi);
 	return -EINVAL;
 }
 

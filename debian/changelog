@@ -1,3 +1,18 @@
+lxcfs (0.7-0ubuntu1) vivid; urgency=medium
+
+  * Upstream release 0.7, which has fixes for handling crashed children
+    and in particular for working around a glibc fork bug
+    (https://sourceware.org/bugzilla/show_bug.cgi?id=15392)
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Fri, 03 Apr 2015 15:20:15 -0500
+
+lxcfs (0.6-0ubuntu3) vivid; urgency=medium
+
+  * Catch a nih_local which was not initialized to NULL (causing occasional
+    SEGVs)
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Thu, 02 Apr 2015 20:31:29 -0500
+
 lxcfs (0.6-0ubuntu2) vivid; urgency=medium
 
   * Cherry-pick testcase fix from upstream.

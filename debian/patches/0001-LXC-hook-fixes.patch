@@ -1,0 +1,53 @@
+From 288bdc12a7dd59602884b5c0bb630a5efd5b8922 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?St=C3=A9phane=20Graber?= <stgraber@ubuntu.com>
+Date: Tue, 7 Apr 2015 16:17:40 -0400
+Subject: LXC hook fixes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ - Detects whether cgroups are enabled in the container's config
+ - Don't mount a second tmpfs on /sys/fs/cgroup
+
+Signed-off-by: Stéphane Graber <stgraber@ubuntu.com>
+---
+ share/lxc.mount.hook.in | 20 +++++++++-----------
+ 1 file changed, 9 insertions(+), 11 deletions(-)
+
+diff --git a/share/lxc.mount.hook.in b/share/lxc.mount.hook.in
+index f9cbea0..c8916ef 100755
+--- a/share/lxc.mount.hook.in
++++ b/share/lxc.mount.hook.in
+@@ -1,5 +1,14 @@
+ #!/bin/sh -eu
+ 
++# Don't mess with containers that don't have /sys/fs/cgroup configured
++# (lxc.mount.auto = cgroup:mixed)
++
++if touch ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/lxcfs; then
++    rm ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/lxcfs
++else
++    exit 0
++fi
++
+ # /proc files
+ if [ -d @LXCFSTARGETDIR@/proc/ ]; then
+     for entry in @LXCFSTARGETDIR@/proc/*; do
+@@ -10,17 +19,6 @@ fi
+ 
+ # /sys/fs/cgroup files
+ if [ -d "${LXC_ROOTFS_MOUNT}/sys/fs/cgroup" ]; then
+-    mount -n -t tmpfs none ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/ -o size=4k,mode=755
+-    if [ -d /sys/fs/cgroup/cgmanager.lower ]; then
+-        mkdir ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/cgmanager
+-        mount -n --bind /sys/fs/cgroup/cgmanager.lower \
+-            ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/cgmanager
+-    elif [ -d /sys/fs/cgroup/cgmanager ]; then
+-        mkdir ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/cgmanager
+-        mount -n --bind /sys/fs/cgroup/cgmanager \
+-            ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/cgmanager
+-    fi
+-
+     if [ -d @LXCFSTARGETDIR@/cgroup ]; then
+         for entry in @LXCFSTARGETDIR@/cgroup/*; do
+             DEST=$(basename $entry)

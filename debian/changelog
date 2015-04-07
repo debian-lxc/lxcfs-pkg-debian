@@ -1,3 +1,15 @@
+lxcfs (0.7-0ubuntu2) vivid; urgency=medium
+
+  * Cherry-pick a fix to the LXC hook.
+    - Fixes problems with checkpoint/restore due to double-mounting
+      /sys/fs/cgroup
+    - Respect the container's configuration by skipping lxcfs if
+      /sys/fs/cgroup isn't writable.
+    - Skip the cgmanager handling code as that was only applicable if we
+      were starting from a clean tmpfs.
+
+ -- Stéphane Graber <stgraber@ubuntu.com>  Tue, 07 Apr 2015 16:21:01 -0400
+
 lxcfs (0.7-0ubuntu1) vivid; urgency=medium
 
   * Upstream release 0.7, which has fixes for handling crashed children

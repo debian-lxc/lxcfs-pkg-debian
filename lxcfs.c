@@ -2393,7 +2393,7 @@ static bool is_help(char *w)
 int main(int argc, char *argv[])
 {
 	int ret;
-	struct lxcfs_state *d;
+	struct lxcfs_state *d = NULL;
 
 	if (argc < 2 || is_help(argv[1]))
 		usage(argv[0]);
@@ -2410,5 +2410,6 @@ int main(int argc, char *argv[])
 
 	ret = fuse_main(argc, argv, &lxcfs_ops, d);
 
+	free(d);
 	return ret;
 }

@@ -26,8 +26,21 @@ if [ -d "${LXC_ROOTFS_MOUNT}/sys/fs/cgroup" ]; then
                 DEST="systemd"
             fi
 
+            if mountpoint -q ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/$DEST; then
+                continue
+            fi
             mkdir ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/$DEST
             mount -n --bind $entry ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/$DEST
+
+            # make sure that cpu,cpuacct shows up as cpu and cpuacct
+            # separately, else systemd is unhappy
+            if echo $DEST | grep -q ","; then
+                arr=$(echo $DEST | tr "," "\n")
+                for single in $arr
+                do
+                    ln -s $DEST ${LXC_ROOTFS_MOUNT}/sys/fs/cgroup/$single
+                done
+            fi
         done
 
         if [ -d ${LXC_ROOTFS_MOUNT}@LXCFSTARGETDIR@/ ]; then

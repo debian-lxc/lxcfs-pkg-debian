@@ -10,7 +10,7 @@ pre-start script
     [ ! -d /var/lib/lxcfs/proc ] || { stop; exit 0; }
 end script
 
-exec /usr/bin/lxcfs -s -f -o allow_other /var/lib/lxcfs
+exec /usr/bin/lxcfs /var/lib/lxcfs
 
 post-stop script
     # Cleanup in case of crash

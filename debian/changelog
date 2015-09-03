@@ -1,3 +1,11 @@
+lxcfs (0.8-0ubuntu1) wily; urgency=medium
+
+  * New upstream release.
+    - drop upstream patches
+    - fixes lxcfs.1 (LP: #1452578)
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Thu, 07 May 2015 14:47:12 -0500
+
 lxcfs (0.7-0ubuntu4) vivid; urgency=medium
 
   * Add some more sanity checks (LP: #1413405)

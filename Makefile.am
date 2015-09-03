@@ -13,7 +13,7 @@ AM_LDFLAGS = $(DBUS_LIBS) $(NIH_LIBS) $(NIH_DBUS_LIBS) $(CGMANAGER_LIBS) $(FUSE_
 
 bin_PROGRAMS = lxcfs
 
-lxcfs_SOURCES = lxcfs.c cgmanager.c cgmanager.h
+lxcfs_SOURCES = lxcfs.c cgmanager.c cgmanager.h cpuset.c
 
 EXTRA_DIST = \
 	lxcfs.man.add
@@ -24,6 +24,14 @@ man_MANS = lxcfs.1
 lxcfs.1: lxcfs lxcfs.man.add
 	$(HELP2MAN) -n "Set up cgroup fs for containers" --no-discard-stderr -s 1 -I lxcfs.man.add -N ./lxcfs > lxcfs.1
 endif
+
+TEST_READ: tests/test-read.c
+	$(CC) -o tests/test-read tests/test-read.c
+
+TEST_CPUSET: tests/cpusetrange.c cpuset.c
+	$(CC) -o tests/cpusetrange tests/cpusetrange.c cpuset.c
+
+tests: TEST_READ TEST_CPUSET
 
 distclean:
 	rm -rf .deps/ \

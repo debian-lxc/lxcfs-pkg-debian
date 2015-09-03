@@ -100,7 +100,8 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)" "$(DESTDIR)$(man1dir)"
 PROGRAMS = $(bin_PROGRAMS)
-am_lxcfs_OBJECTS = lxcfs.$(OBJEXT) cgmanager.$(OBJEXT)
+am_lxcfs_OBJECTS = lxcfs.$(OBJEXT) cgmanager.$(OBJEXT) \
+	cpuset.$(OBJEXT)
 lxcfs_OBJECTS = $(am_lxcfs_OBJECTS)
 lxcfs_LDADD = $(LDADD)
 AM_V_lt = $(am__v_lt_@AM_V@)
@@ -398,7 +399,7 @@ AM_CFLAGS = -Wall -ggdb -D_GNU_SOURCE -DSBINDIR=\"$(SBINDIR)\" \
 	$(DBUS_CFLAGS) $(NIH_CFLAGS) $(NIH_DBUS_CFLAGS) \
 	$(CGMANAGER_CFLAGS) $(FUSE_CFLAGS)
 AM_LDFLAGS = $(DBUS_LIBS) $(NIH_LIBS) $(NIH_DBUS_LIBS) $(CGMANAGER_LIBS) $(FUSE_LIBS)
-lxcfs_SOURCES = lxcfs.c cgmanager.c cgmanager.h
+lxcfs_SOURCES = lxcfs.c cgmanager.c cgmanager.h cpuset.c
 EXTRA_DIST = \
 	lxcfs.man.add
 
@@ -518,6 +519,7 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cgmanager.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cpuset.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/lxcfs.Po@am__quote@
 
 .c.o:
@@ -1020,6 +1022,14 @@ uninstall-man: uninstall-man1
 
 @HAVE_HELP2MAN_TRUE@lxcfs.1: lxcfs lxcfs.man.add
 @HAVE_HELP2MAN_TRUE@	$(HELP2MAN) -n "Set up cgroup fs for containers" --no-discard-stderr -s 1 -I lxcfs.man.add -N ./lxcfs > lxcfs.1
+
+TEST_READ: tests/test-read.c
+	$(CC) -o tests/test-read tests/test-read.c
+
+TEST_CPUSET: tests/cpusetrange.c cpuset.c
+	$(CC) -o tests/cpusetrange tests/cpusetrange.c cpuset.c
+
+tests: TEST_READ TEST_CPUSET
 
 distclean:
 	rm -rf .deps/ \

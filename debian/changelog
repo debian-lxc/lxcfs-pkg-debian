@@ -1,3 +1,12 @@
+lxcfs (0.7-0ubuntu3) vivid; urgency=medium
+
+  * 0002-Make-sure-that-that-cgroup-and-the-controller-are-se.patch: when
+    looking a controller under /cgroup, make sure that '/' separates them,
+    so that '/cgroup@freezer' is not a valid path.  (LP: #1413405)
+  * 0003-free-d-at-program-end.patch: free the lxcfs_state before exiting.
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Sun, 19 Apr 2015 08:44:06 -0500
+
 lxcfs (0.7-0ubuntu2) vivid; urgency=medium
 
   * Cherry-pick a fix to the LXC hook.

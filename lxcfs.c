@@ -6,10 +6,6 @@
  * See COPYING file for details.
  */
 
-/*
- * NOTES - make sure to run this as -s to avoid threading.
- * TODO - can we enforce that here from the code?
- */
 #define FUSE_USE_VERSION 26
 
 #include <stdio.h>
@@ -33,6 +29,7 @@
 #include <nih/string.h>
 
 #include "cgmanager.h"
+#include "config.h" // for VERSION
 
 struct lxcfs_state {
 	/*
@@ -42,6 +39,36 @@ struct lxcfs_state {
 	char **subsystems;
 };
 #define LXCFS_DATA ((struct lxcfs_state *) fuse_get_context()->private_data)
+
+enum {
+	LXC_TYPE_CGDIR,
+	LXC_TYPE_CGFILE,
+	LXC_TYPE_PROC_MEMINFO,
+	LXC_TYPE_PROC_CPUINFO,
+	LXC_TYPE_PROC_UPTIME,
+	LXC_TYPE_PROC_STAT,
+	LXC_TYPE_PROC_DISKSTATS,
+};
+
+struct file_info {
+	char *controller;
+	char *cgroup;
+	char *file;
+	int type;
+	char *buf;  // unused as of yet
+	int buflen;
+	int size; //actual data size
+};
+
+/* reserve buffer size, for cpuall in /proc/stat */
+#define BUF_RESERVE_SIZE 256
+
+static char *must_copy_string(void *parent, const char *str)
+{
+	if (!str)
+		return NULL;
+	return NIH_MUST( nih_strdup(parent, str) );
+}
 
 /*
  * TODO - return value should denote whether child exited with failure
@@ -414,16 +441,6 @@ static void get_cgdir_and_path(const char *cg, char **dir, char **file)
 	*p = '\0';
 }
 
-static size_t get_file_size(const char *contrl, const char *cg, const char *f)
-{
-	nih_local char *data = NULL;
-	size_t s;
-	if (!cgm_get_value(contrl, cg, f, &data))
-		return -EINVAL;
-	s = strlen(data);
-	return s;
-}
-
 /*
  * FUSE ops for /cgroup
  */
@@ -516,7 +533,7 @@ static int cg_getattr(const char *path, struct stat *sb)
 		sb->st_nlink = 1;
 		sb->st_uid = k->uid;
 		sb->st_gid = k->gid;
-		sb->st_size = get_file_size(controller, path1, path2);
+		sb->st_size = 0;
 		return 0;
 	}
 
@@ -532,41 +549,59 @@ static int cg_opendir(const char *path, struct fuse_file_info *fi)
 	struct fuse_context *fc = fuse_get_context();
 	nih_local struct cgm_keys **list = NULL;
 	const char *cgroup;
+	struct file_info *dir_info;
 	nih_local char *controller = NULL;
-	nih_local char *nextcg = NULL;
 
 	if (!fc)
 		return -EIO;
 
-	if (strcmp(path, "/cgroup") == 0)
-		return 0;
+	if (strcmp(path, "/cgroup") == 0) {
+		cgroup = NULL;
+		controller = NULL;
+	} else {
+		// return list of keys for the controller, and list of child cgroups
+		controller = pick_controller_from_path(fc, path);
+		if (!controller)
+			return -EIO;
 
-	// return list of keys for the controller, and list of child cgroups
-	controller = pick_controller_from_path(fc, path);
-	if (!controller)
-		return -EIO;
-
-	cgroup = find_cgroup_in_path(path);
-	if (!cgroup) {
-		/* this is just /cgroup/controller, return its contents */
-		cgroup = "/";
+		cgroup = find_cgroup_in_path(path);
+		if (!cgroup) {
+			/* this is just /cgroup/controller, return its contents */
+			cgroup = "/";
+		}
 	}
 
-	if (!fc_may_access(fc, controller, cgroup, NULL, O_RDONLY))
+	if (cgroup && !fc_may_access(fc, controller, cgroup, NULL, O_RDONLY))
 		return -EACCES;
+
+	/* we'll free this at cg_releasedir */
+	dir_info = NIH_MUST( nih_alloc(NULL, sizeof(*dir_info)) );
+	dir_info->controller = must_copy_string(dir_info, controller);
+	dir_info->cgroup = must_copy_string(dir_info, cgroup);
+	dir_info->type = LXC_TYPE_CGDIR;
+	dir_info->buf = NULL;
+	dir_info->file = NULL;
+	dir_info->buflen = 0;
+
+	fi->fh = (unsigned long)dir_info;
 	return 0;
 }
 
 static int cg_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
 		struct fuse_file_info *fi)
 {
+	struct file_info *d = (struct file_info *)fi->fh;
+	nih_local struct cgm_keys **list = NULL;
+	int i;
+	nih_local char *nextcg = NULL;
 	struct fuse_context *fc = fuse_get_context();
 
-	if (!fc)
+	if (d->type != LXC_TYPE_CGDIR) {
+		fprintf(stderr, "Internal error: file cache info used in readdir\n");
 		return -EIO;
-
-	if (strcmp(path, "/cgroup") == 0) {
-		// get list of controllers
+	}
+	if (!d->cgroup && !d->controller) {
+		// ls /var/lib/lxcfs/cgroup - just show list of controllers
 		char **list = LXCFS_DATA ? LXCFS_DATA->subsystems : NULL;
 		int i;
 
@@ -581,31 +616,11 @@ static int cg_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
 		return 0;
 	}
 
-	// return list of keys for the controller, and list of child cgroups
-	nih_local struct cgm_keys **list = NULL;
-	const char *cgroup;
-	nih_local char *controller = NULL;
-	int i;
-	nih_local char *nextcg = NULL;
-
-	controller = pick_controller_from_path(fc, path);
-	if (!controller)
-		return -EIO;
-
-	cgroup = find_cgroup_in_path(path);
-	if (!cgroup) {
-		/* this is just /cgroup/controller, return its contents */
-		cgroup = "/";
-	}
-
-	if (!fc_may_access(fc, controller, cgroup, NULL, O_RDONLY))
-		return -EACCES;
-
-	if (!cgm_list_keys(controller, cgroup, &list))
+	if (!cgm_list_keys(d->controller, d->cgroup, &list))
 		// not a valid cgroup
 		return -EINVAL;
 
-	if (!caller_is_in_ancestor(fc->pid, controller, cgroup, &nextcg)) {
+	if (!caller_is_in_ancestor(fc->pid, d->controller, d->cgroup, &nextcg)) {
 		if (nextcg) {
 			int ret;
 			ret = filler(buf, nextcg,  NULL, 0);
@@ -624,7 +639,7 @@ static int cg_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
 	// now get the list of child cgroups
 	nih_local char **clist = NULL;
 
-	if (!cgm_list_children(controller, cgroup, &clist))
+	if (!cgm_list_children(d->controller, d->cgroup, &clist))
 		return 0;
 	for (i = 0; clist[i]; i++) {
 		if (filler(buf, clist[i], NULL, 0) != 0) {
@@ -634,14 +649,23 @@ static int cg_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
 	return 0;
 }
 
+static void do_release_file_info(struct file_info *f)
+{
+	/*
+	 * all file_info fields which are nih_alloc()d with f as parent
+	 * will be automatically freed
+	 */
+	nih_free(f);
+}
+
 static int cg_releasedir(const char *path, struct fuse_file_info *fi)
 {
+	struct file_info *d = (struct file_info *)fi->fh;
+
+	do_release_file_info(d);
 	return 0;
 }
 
-/*
- * TODO - cache info here for read/write, release in cg_release.
- */
 static int cg_open(const char *path, struct fuse_file_info *fi)
 {
 	nih_local char *controller = NULL;
@@ -649,6 +673,7 @@ static int cg_open(const char *path, struct fuse_file_info *fi)
 	char *fpath = NULL, *path1, *path2;
 	nih_local char * cgdir = NULL;
 	nih_local struct cgm_keys *k = NULL;
+	struct file_info *file_info;
 	struct fuse_context *fc = fuse_get_context();
 
 	if (!fc)
@@ -670,15 +695,33 @@ static int cg_open(const char *path, struct fuse_file_info *fi)
 		path2 = fpath;
 	}
 
-	if ((k = get_cgroup_key(controller, path1, path2)) != NULL) {
-		if (!fc_may_access(fc, controller, path1, path2, fi->flags))
-			// should never get here
-			return -EACCES;
+	k = get_cgroup_key(controller, path1, path2);
+	if (!k)
+		return -EINVAL;
 
-		return 0;
-	}
+	if (!fc_may_access(fc, controller, path1, path2, fi->flags))
+		// should never get here
+		return -EACCES;
 
-	return -EINVAL;
+	/* we'll free this at cg_release */
+	file_info = NIH_MUST( nih_alloc(NULL, sizeof(*file_info)) );
+	file_info->controller = must_copy_string(file_info, controller);
+	file_info->cgroup = must_copy_string(file_info, path1);
+	file_info->file = must_copy_string(file_info, path2);
+	file_info->type = LXC_TYPE_CGFILE;
+	file_info->buf = NULL;
+	file_info->buflen = 0;
+
+	fi->fh = (unsigned long)file_info;
+	return 0;
+}
+
+static int cg_release(const char *path, struct fuse_file_info *fi)
+{
+	struct file_info *f = (struct file_info *)fi->fh;
+
+	do_release_file_info(f);
+	return 0;
 }
 
 static int msgrecv(int sockfd, void *buf, size_t len)
@@ -996,52 +1039,41 @@ out:
 static int cg_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
-	nih_local char *controller = NULL;
-	const char *cgroup;
-	char *fpath = NULL, *path1, *path2;
 	struct fuse_context *fc = fuse_get_context();
-	nih_local char * cgdir = NULL;
+	struct file_info *f = (struct file_info *)fi->fh;
 	nih_local struct cgm_keys *k = NULL;
 
-	if (offset)
+	if (f->type != LXC_TYPE_CGFILE) {
+		fprintf(stderr, "Internal error: directory cache info used in cg_read\n");
 		return -EIO;
+	}
+
+	if (offset)
+		return 0;
 
 	if (!fc)
 		return -EIO;
 
-	controller = pick_controller_from_path(fc, path);
-	if (!controller)
-		return -EINVAL;
-	cgroup = find_cgroup_in_path(path);
-	if (!cgroup)
+	if (!f->controller)
 		return -EINVAL;
 
-	get_cgdir_and_path(cgroup, &cgdir, &fpath);
-	if (!fpath) {
-		path1 = "/";
-		path2 = cgdir;
-	} else {
-		path1 = cgdir;
-		path2 = fpath;
-	}
-
-	if ((k = get_cgroup_key(controller, path1, path2)) != NULL) {
+	if ((k = get_cgroup_key(f->controller, f->cgroup, f->file)) != NULL) {
 		nih_local char *data = NULL;
 		int s;
 		bool r;
 
-		if (!fc_may_access(fc, controller, path1, path2, O_RDONLY))
+		if (!fc_may_access(fc, f->controller, f->cgroup, f->file, O_RDONLY))
 			// should never get here
 			return -EACCES;
 
-		if (strcmp(path2, "tasks") == 0 ||
-				strcmp(path2, "/tasks") == 0 ||
-				strcmp(path2, "/cgroup.procs") == 0 ||
-				strcmp(path2, "cgroup.procs") == 0)
+		if (strcmp(f->file, "tasks") == 0 ||
+				strcmp(f->file, "/tasks") == 0 ||
+				strcmp(f->file, "/cgroup.procs") == 0 ||
+				strcmp(f->file, "cgroup.procs") == 0)
 			// special case - we have to translate the pids
-			r = do_read_pids(fc->pid, controller, path1, path2, &data);
+			r = do_read_pids(fc->pid, f->controller, f->cgroup, f->file, &data);
 		else
-			r = cgm_get_value(controller, path1, path2, &data);
+			r = cgm_get_value(f->controller, f->cgroup, f->file, &data);
 
 		if (!r)
 			return -EINVAL;
@@ -1052,6 +1084,8 @@ static int cg_read(const char *path, char *buf, size_t size, off_t offset,
 		if (s > size)
 			s = size;
 		memcpy(buf, data, s);
+		if (s > 0 && s < size && data[s-1] != '\n')
+			buf[s++] = '\n';
 
 		return s;
 	}
@@ -1230,16 +1264,18 @@ out:
 int cg_write(const char *path, const char *buf, size_t size, off_t offset,
 	     struct fuse_file_info *fi)
 {
-	nih_local char *controller = NULL;
-	const char *cgroup;
-	char *fpath = NULL, *path1, *path2;
 	struct fuse_context *fc = fuse_get_context();
-	nih_local char * cgdir = NULL;
-	nih_local struct cgm_keys *k = NULL;
 	nih_local char *localbuf = NULL;
+	nih_local struct cgm_keys *k = NULL;
+	struct file_info *f = (struct file_info *)fi->fh;
+
+	if (f->type != LXC_TYPE_CGFILE) {
+		fprintf(stderr, "Internal error: directory cache info used in cg_write\n");
+		return -EIO;
+	}
 
 	if (offset)
-		return -EINVAL;
+		return 0;
 
 	if (!fc)
 		return -EIO;
@@ -1247,36 +1283,21 @@ int cg_write(const char *path, const char *buf, size_t size, off_t offset,
 	localbuf = NIH_MUST( nih_alloc(NULL, size+1) );
 	localbuf[size] = '\0';
 	memcpy(localbuf, buf, size);
-	controller = pick_controller_from_path(fc, path);
-	if (!controller)
-		return -EINVAL;
-	cgroup = find_cgroup_in_path(path);
-	if (!cgroup)
-		return -EINVAL;
 
-	get_cgdir_and_path(cgroup, &cgdir, &fpath);
-	if (!fpath) {
-		path1 = "/";
-		path2 = cgdir;
-	} else {
-		path1 = cgdir;
-		path2 = fpath;
-	}
-
-	if ((k = get_cgroup_key(controller, path1, path2)) != NULL) {
+	if ((k = get_cgroup_key(f->controller, f->cgroup, f->file)) != NULL) {
 		bool r;
 
-		if (!fc_may_access(fc, controller, path1, path2, O_WRONLY))
+		if (!fc_may_access(fc, f->controller, f->cgroup, f->file, O_WRONLY))
 			return -EACCES;
 
-		if (strcmp(path2, "tasks") == 0 ||
-				strcmp(path2, "/tasks") == 0 ||
-				strcmp(path2, "/cgroup.procs") == 0 ||
-				strcmp(path2, "cgroup.procs") == 0)
+		if (strcmp(f->file, "tasks") == 0 ||
+				strcmp(f->file, "/tasks") == 0 ||
+				strcmp(f->file, "/cgroup.procs") == 0 ||
+				strcmp(f->file, "cgroup.procs") == 0)
 			// special case - we have to translate the pids
-			r = do_write_pids(fc->pid, controller, path1, path2, localbuf);
+			r = do_write_pids(fc->pid, f->controller, f->cgroup, f->file, localbuf);
 		else
-			r = cgm_set_value(controller, path1, path2, localbuf);
+			r = cgm_set_value(f->controller, f->cgroup, f->file, localbuf);
 
 		if (!r)
 			return -EINVAL;
@@ -1501,24 +1522,24 @@ static void get_mem_cached(char *memstat, unsigned long *v)
 }
 
 static void get_blkio_io_value(char *str, unsigned major, unsigned minor, char *iotype, unsigned long *v)
-{   
+{
 	char *eol;
 	char key[32];
-	
+
 	memset(key, 0, 32);
 	snprintf(key, 32, "%u:%u %s", major, minor, iotype);
-	
+
 	size_t len = strlen(key);
 	*v = 0;
 
 	while (*str) {
 		if (startswith(str, key)) {
- 			sscanf(str + len, "%lu", v);
- 			return;
- 		}
- 		eol = strchr(str, '\n');
+			sscanf(str + len, "%lu", v);
+			return;
+		}
+		eol = strchr(str, '\n');
 		if (!eol)
- 			return;
+			return;
 		str = eol+1;
 	}
 }
@@ -1569,15 +1590,24 @@ static int proc_meminfo_read(char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
 	struct fuse_context *fc = fuse_get_context();
+	struct file_info *d = (struct file_info *)fi->fh;
 	nih_local char *cg = get_pid_cgroup(fc->pid, "memory");
 	nih_local char *memlimit_str = NULL, *memusage_str = NULL, *memstat_str = NULL;
 	unsigned long memlimit = 0, memusage = 0, cached = 0, hosttotal = 0;
 	char *line = NULL;
 	size_t linelen = 0, total_len = 0;
+	char *cache = d->buf;
+	size_t cache_size = d->buflen;
 	FILE *f;
 
-	if (offset)
-		return -EINVAL;
+	if (offset){
+		if (offset > d->size)
+			return -EINVAL;
+		int left = d->size - offset;
+		total_len = left > size ? size: left;
+		memcpy(buf, cache + offset, total_len);
+		return total_len;
+	}
 
 	if (!cg)
 		return 0;
@@ -1626,11 +1656,16 @@ static int proc_meminfo_read(char *buf, size_t size, off_t offset,
 			printme = lbuf;
 		} else
 			printme = line;
-		l = snprintf(buf, size, "%s", printme);
-		buf += l;
-		size -= l;
+
+		l = snprintf(cache, cache_size, "%s", printme);
+		cache += l;
+		cache_size -= l;
 		total_len += l;
 	}
+
+	d->size = total_len;
+	if (total_len > size ) total_len = size;
+	memcpy(buf, d->buf, total_len);
 
 	fclose(f);
 	free(line);
@@ -1650,47 +1685,7 @@ static char *get_cpuset(const char *cg)
 	return answer;
 }
 
-/*
- * Helper functions for cpuset_in-set
- */
-char *cpuset_nexttok(const char *c)
-{
-	char *r = strchr(c+1, ',');
-	if (r)
-		return r+1;
-	return NULL;
-}
-
-int cpuset_getrange(const char *c, int *a, int *b)
-{
-	int ret;
-
-	ret = sscanf(c, "%d-%d", a, b);
-	return ret;
-}
-
-/*
- * cpusets are in format "1,2-3,4"
- * iow, comma-delimited ranges
- */
-static bool cpu_in_cpuset(int cpu, const char *cpuset)
-{
-	const char *c;
-
-	for (c = cpuset; c; c = cpuset_nexttok(c)) {
-		int a, b, ret;
-
-		ret = cpuset_getrange(c, &a, &b);
-		if (ret == 1 && cpu == a)
-			return true;
-		if (ret != 2) // bad cpuset!
-			return false;
-		if (cpu >= a && cpu <= b)
-			return true;
-	}
-
-	return false;
-}
+bool cpu_in_cpuset(int cpu, const char *cpuset);
 
 static bool cpuline_in_cpuset(const char *line, const char *cpuset)
 {
@@ -1717,16 +1712,25 @@ static int proc_cpuinfo_read(char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
 	struct fuse_context *fc = fuse_get_context();
+	struct file_info *d = (struct file_info *)fi->fh;
 	nih_local char *cg = get_pid_cgroup(fc->pid, "cpuset");
 	nih_local char *cpuset = NULL;
 	char *line = NULL;
 	size_t linelen = 0, total_len = 0;
 	bool am_printing = false;
 	int curcpu = -1;
+	char *cache = d->buf;
+	size_t cache_size = d->buflen;
 	FILE *f;
 
-	if (offset)
-		return -EINVAL;
+	if (offset){
+		if (offset > d->size)
+			return -EINVAL;
+		int left = d->size - offset;
+		total_len = left > size ? size: left;
+		memcpy(buf, cache + offset, total_len);
+		return total_len;
+	}
 
 	if (!cg)
 		return 0;
@@ -1745,20 +1749,40 @@ static int proc_cpuinfo_read(char *buf, size_t size, off_t offset,
 			am_printing = cpuline_in_cpuset(line, cpuset);
 			if (am_printing) {
 				curcpu ++;
-				l = snprintf(buf, size, "processor	: %d\n", curcpu);
-				buf += l;
-				size -= l;
-				total_len += l;
+				l = snprintf(cache, cache_size, "processor	: %d\n", curcpu);
+				if (l < cache_size){
+					cache += l;
+					cache_size -= l;
+					total_len += l;
+				}else{
+					cache += cache_size;
+					total_len += cache_size;
+					cache_size = 0;
+					break;
+				}
 			}
 			continue;
 		}
 		if (am_printing) {
-			l = snprintf(buf, size, "%s", line);
-			buf += l;
-			size -= l;
-			total_len += l;
+			l = snprintf(cache, cache_size, "%s", line);
+			if (l < cache_size) {
+				cache += l;
+				cache_size -= l;
+				total_len += l;
+			} else {
+				cache += cache_size;
+				total_len += cache_size;
+				cache_size = 0;
+				break;
+			}
 		}
 	}
+
+	d->size = total_len;
+	if (total_len > size ) total_len = size;
+
+	/* read from off 0 */
+	memcpy(buf, d->buf, total_len);
 
 	fclose(f);
 	free(line);
@@ -1769,15 +1793,30 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
 	struct fuse_context *fc = fuse_get_context();
+	struct file_info *d = (struct file_info *)fi->fh;
 	nih_local char *cg = get_pid_cgroup(fc->pid, "cpuset");
 	nih_local char *cpuset = NULL;
 	char *line = NULL;
 	size_t linelen = 0, total_len = 0;
 	int curcpu = -1; /* cpu numbering starts at 0 */
+	unsigned long user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0, guest = 0;
+	unsigned long user_sum = 0, nice_sum = 0, system_sum = 0, idle_sum = 0, iowait_sum = 0,
+					irq_sum = 0, softirq_sum = 0, steal_sum = 0, guest_sum = 0;
+#define CPUALL_MAX_SIZE BUF_RESERVE_SIZE
+	char cpuall[CPUALL_MAX_SIZE];
+	/* reserve for cpu all */
+	char *cache = d->buf + CPUALL_MAX_SIZE;
+	size_t cache_size = d->buflen - CPUALL_MAX_SIZE;
 	FILE *f;
 
-	if (offset)
-		return -EINVAL;
+	if (offset){
+		if (offset > d->size)
+			return -EINVAL;
+		int left = d->size - offset;
+		total_len = left > size ? size: left;
+		memcpy(buf, d->buf + offset, total_len);
+		return total_len;
+	}
 
 	if (!cg)
 		return 0;
@@ -1790,6 +1829,12 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 	if (!f)
 		return 0;
 
+	//skip first line
+	if (getline(&line, &linelen, f) < 0) {
+		fprintf(stderr, "proc_stat_read read first line failed\n");
+		goto out;
+	}
+
 	while (getline(&line, &linelen, f) != -1) {
 		size_t l;
 		int cpu;
@@ -1798,11 +1843,19 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 
 		if (sscanf(line, "cpu%9[^ ]", cpu_char) != 1) {
 			/* not a ^cpuN line containing a number N, just print it */
-			l = snprintf(buf, size, "%s", line);
-			buf += l;
-			size -= l;
-			total_len += l;
-			continue;
+			l = snprintf(cache, cache_size, "%s", line);
+			if (l < cache_size){
+				cache += l;
+				cache_size -= l;
+				total_len += l;
+				continue;
+			}else{
+				//no more space, break it
+				cache += cache_size;
+				total_len += cache_size;
+				cache_size = 0;
+				break;
+			}
 		}
 
 		if (sscanf(cpu_char, "%d", &cpu) != 1)
@@ -1814,12 +1867,45 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 		c = strchr(line, ' ');
 		if (!c)
 			continue;
-		l = snprintf(buf, size, "cpu%d %s", curcpu, c);
-		buf += l;
-		size -= l;
+		l = snprintf(cache, cache_size, "cpu%d%s", curcpu, c);
+		cache += l;
+		cache_size -= l;
 		total_len += l;
+
+		if (sscanf(line, "%*s %lu %lu %lu %lu %lu %lu %lu %lu %lu", &user, &nice, &system, &idle, &iowait, &irq,
+			&softirq, &steal, &guest) != 9)
+			continue;
+		user_sum += user;
+		nice_sum += nice;
+		system_sum += system;
+		idle_sum += idle;
+		iowait_sum += iowait;
+		irq_sum += irq;
+		softirq_sum += softirq;
+		steal_sum += steal;
+		guest_sum += guest;
 	}
 
+	cache = d->buf;
+
+	int cpuall_len = snprintf(cpuall, CPUALL_MAX_SIZE, "%s %lu %lu %lu %lu %lu %lu %lu %lu %lu\n",
+		"cpu ", user_sum, nice_sum, system_sum, idle_sum, iowait_sum, irq_sum, softirq_sum, steal_sum, guest_sum);
+	if (cpuall_len > 0 && cpuall_len < CPUALL_MAX_SIZE){
+		memcpy(cache, cpuall, cpuall_len);
+		cache += cpuall_len;
+	}else{
+		/* shouldn't happen */
+		fprintf(stderr, "proc_stat_read copy cpuall failed, cpuall_len=%d\n", cpuall_len);
+		cpuall_len = 0;
+	}
+
+	memmove(cache, d->buf + CPUALL_MAX_SIZE, total_len);
+	total_len += cpuall_len;
+	d->size = total_len;
+	if (total_len > size ) total_len = size;
+
+	memcpy(buf, d->buf, total_len);
+out:
 	fclose(f);
 	free(line);
 	return total_len;
@@ -1998,12 +2084,20 @@ static int proc_uptime_read(char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
 	struct fuse_context *fc = fuse_get_context();
+	struct file_info *d = (struct file_info *)fi->fh;
 	long int reaperage = getreaperage(fc->pid);;
 	long int idletime = getprocidle();
+	size_t total_len = 0;
 
-	if (offset)
-		return -EINVAL;
-	return snprintf(buf, size, "%ld %ld\n", reaperage, idletime);
+	if (offset){
+		if (offset > d->size)
+			return -EINVAL;
+		return 0;
+	}
+
+	total_len = snprintf(buf, size, "%ld %ld\n", reaperage, idletime);
+	d->size = total_len;
+	return total_len;
 }
 
 static int proc_diskstats_read(char *buf, size_t size, off_t offset,
@@ -2011,6 +2105,7 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 {
 	char dev_name[72];
 	struct fuse_context *fc = fuse_get_context();
+	struct file_info *d = (struct file_info *)fi->fh;
 	nih_local char *cg = get_pid_cgroup(fc->pid, "blkio");
 	nih_local char *io_serviced_str = NULL, *io_merged_str = NULL, *io_service_bytes_str = NULL,
 			*io_wait_time_str = NULL, *io_service_time_str = NULL;
@@ -2026,8 +2121,11 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 	int i = 0;
 	FILE *f;
 
-	if (offset)
-		return -EINVAL;
+	if (offset){
+		if (offset > d->size)
+			return -EINVAL;
+		return 0;
+	}
 
 	if (!cg)
 		return 0;
@@ -2062,7 +2160,7 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 			read_sectors = read_sectors/512;
 			get_blkio_io_value(io_service_bytes_str, major, minor, "Write", &write_sectors);
 			write_sectors = write_sectors/512;
-			
+
 			get_blkio_io_value(io_service_time_str, major, minor, "Read", &rd_svctm);
 			rd_svctm = rd_svctm/1000000;
 			get_blkio_io_value(io_wait_time_str, major, minor, "Read", &rd_wait);
@@ -2083,7 +2181,7 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 
 		memset(lbuf, 0, 256);
 		if (read || write || read_merged || write_merged || read_sectors || write_sectors || read_ticks || write_ticks) {
-			snprintf(lbuf, 256, "%u       %u %s %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n", 
+			snprintf(lbuf, 256, "%u       %u %s %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n",
 				major, minor, dev_name, read, read_merged, read_sectors, read_ticks,
 				write, write_merged, write_sectors, write_ticks, ios_pgr, tot_ticks, rq_ticks);
 			printme = lbuf;
@@ -2095,6 +2193,8 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 		size -= l;
 		total_len += l;
 	}
+
+	d->size = total_len;
 
 	fclose(f);
 	free(line);
@@ -2137,7 +2237,7 @@ static int proc_getattr(const char *path, struct stat *sb)
 			strcmp(path, "/proc/uptime") == 0 ||
 			strcmp(path, "/proc/stat") == 0 ||
 			strcmp(path, "/proc/diskstats") == 0) {
-		sb->st_size = get_procfile_size(path);
+		sb->st_size = 0;
 		sb->st_mode = S_IFREG | 00444;
 		sb->st_nlink = 1;
 		return 0;
@@ -2160,29 +2260,63 @@ static int proc_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 
 static int proc_open(const char *path, struct fuse_file_info *fi)
 {
-	if (strcmp(path, "/proc/meminfo") == 0 ||
-			strcmp(path, "/proc/cpuinfo") == 0 ||
-			strcmp(path, "/proc/uptime") == 0 ||
-			strcmp(path, "/proc/stat") == 0 || 
-			strcmp(path, "/proc/diskstats") == 0)
-		return 0;
-	return -ENOENT;
+	int type = -1;
+	struct file_info *info;
+
+	if (strcmp(path, "/proc/meminfo") == 0)
+		type = LXC_TYPE_PROC_MEMINFO;
+	else if (strcmp(path, "/proc/cpuinfo") == 0)
+		type = LXC_TYPE_PROC_CPUINFO;
+	else if (strcmp(path, "/proc/uptime") == 0)
+		type = LXC_TYPE_PROC_UPTIME;
+	else if (strcmp(path, "/proc/stat") == 0)
+		type = LXC_TYPE_PROC_STAT;
+	else if (strcmp(path, "/proc/diskstats") == 0)
+		type = LXC_TYPE_PROC_DISKSTATS;
+	if (type == -1)
+		return -ENOENT;
+
+	info = NIH_MUST( nih_alloc(NULL, sizeof(*info)) );
+	memset(info, 0, sizeof(*info));
+	info->type = type;
+
+	info->buflen = get_procfile_size(path) + BUF_RESERVE_SIZE;
+	info->buf = NIH_MUST( nih_alloc(info, info->buflen) );
+	memset(info->buf, 0, info->buflen);
+	/* set actual size to buffer size */
+	info->size = info->buflen;
+
+	fi->fh = (unsigned long)info;
+	return 0;
+}
+
+static int proc_release(const char *path, struct fuse_file_info *fi)
+{
+	struct file_info *f = (struct file_info *)fi->fh;
+
+	do_release_file_info(f);
+	return 0;
 }
 
 static int proc_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
-	if (strcmp(path, "/proc/meminfo") == 0)
+	struct file_info *f = (struct file_info *) fi->fh;
+
+	switch (f->type) {
+	case LXC_TYPE_PROC_MEMINFO:
 		return proc_meminfo_read(buf, size, offset, fi);
-	if (strcmp(path, "/proc/cpuinfo") == 0)
+	case LXC_TYPE_PROC_CPUINFO:
 		return proc_cpuinfo_read(buf, size, offset, fi);
-	if (strcmp(path, "/proc/uptime") == 0)
+	case LXC_TYPE_PROC_UPTIME:
 		return proc_uptime_read(buf, size, offset, fi);
-	if (strcmp(path, "/proc/stat") == 0)
+	case LXC_TYPE_PROC_STAT:
 		return proc_stat_read(buf, size, offset, fi);
-	if (strcmp(path, "/proc/diskstats") == 0)
+	case LXC_TYPE_PROC_DISKSTATS:
 		return proc_diskstats_read(buf, size, offset, fi);
-	return -EINVAL;
+	default:
+		return -EINVAL;
+	}
 }
 
 /*
@@ -2286,7 +2420,12 @@ static int lxcfs_flush(const char *path, struct fuse_file_info *fi)
 
 static int lxcfs_release(const char *path, struct fuse_file_info *fi)
 {
-	return 0;
+	if (strncmp(path, "/cgroup", 7) == 0)
+		return cg_release(path, fi);
+	if (strncmp(path, "/proc", 5) == 0)
+		return proc_release(path, fi);
+
+	return -EINVAL;
 }
 
 static int lxcfs_fsync(const char *path, int datasync, struct fuse_file_info *fi)
@@ -2383,7 +2522,8 @@ static void usage(const char *me)
 {
 	fprintf(stderr, "Usage:\n");
 	fprintf(stderr, "\n");
-	fprintf(stderr, "%s [FUSE and mount options] mountpoint\n", me);
+	fprintf(stderr, "%s mountpoint\n", me);
+	fprintf(stderr, "%s -h\n", me);
 	exit(1);
 }
 
@@ -2397,17 +2537,74 @@ static bool is_help(char *w)
 	return false;
 }
 
+void swallow_arg(int *argcp, char *argv[], char *which)
+{
+	int i;
+
+	for (i = 1; argv[i]; i++) {
+		if (strcmp(argv[i], which) != 0)
+			continue;
+		for (; argv[i]; i++) {
+			argv[i] = argv[i+1];
+		}
+		(*argcp)--;
+		return;
+	}
+}
+
+void swallow_option(int *argcp, char *argv[], char *opt, char *v)
+{
+	int i;
+
+	for (i = 1; argv[i]; i++) {
+		if (!argv[i+1])
+			continue;
+		if (strcmp(argv[i], opt) != 0)
+			continue;
+		if (strcmp(argv[i+1], v) != 0) {
+			fprintf(stderr, "Warning: unexpected fuse option %s\n", v);
+			exit(1);
+		}
+		for (; argv[i+1]; i++) {
+			argv[i] = argv[i+2];
+		}
+		(*argcp) -= 2;
+		return;
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	int ret = -1;
 	struct lxcfs_state *d = NULL;
+	/*
+	 * what we pass to fuse_main is:
+	 * argv[0] -s -f -o allow_other,directio argv[1] NULL
+	 */
+#define NARGS 7
+	char *newargv[7];
 
-	if (argc < 2 || is_help(argv[1]))
+	/* accomodate older init scripts */
+	swallow_arg(&argc, argv, "-s");
+	swallow_arg(&argc, argv, "-f");
+	swallow_option(&argc, argv, "-o", "allow_other");
+
+	if (argc == 2  && strcmp(argv[1], "--version") == 0) {
+		fprintf(stderr, "%s\n", VERSION);
+		exit(0);
+	}
+	if (argc != 2 || is_help(argv[1]))
 		usage(argv[0]);
 
-	d = malloc(sizeof(*d));
-	if (!d)
-		return -1;
+	d = NIH_MUST( malloc(sizeof(*d)) );
+
+	newargv[0] = argv[0];
+	newargv[1] = "-s";
+	newargv[2] = "-f";
+	newargv[3] = "-o";
+	newargv[4] = "allow_other,direct_io";
+	newargv[5] = argv[1];
+	newargv[6] = NULL;
 
 	if (!cgm_escape_cgroup())
 		fprintf(stderr, "WARNING: failed to escape to root cgroup\n");
@@ -2415,7 +2612,7 @@ int main(int argc, char *argv[])
 	if (!cgm_get_controllers(&d->subsystems))
 		goto out;
 
-	ret = fuse_main(argc, argv, &lxcfs_ops, d);
+	ret = fuse_main(NARGS - 1, newargv, &lxcfs_ops, d);
 
 out:
 	free(d);

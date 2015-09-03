@@ -1,3 +1,9 @@
+lxcfs (0.7-0ubuntu4) vivid; urgency=medium
+
+  * Add some more sanity checks (LP: #1413405)
+
+ -- Serge Hallyn <serge.hallyn@ubuntu.com>  Mon, 20 Apr 2015 08:42:18 -0500
+
 lxcfs (0.7-0ubuntu3) vivid; urgency=medium
 
   * 0002-Make-sure-that-that-cgroup-and-the-controller-are-se.patch: when

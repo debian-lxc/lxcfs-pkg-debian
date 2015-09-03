@@ -1,7 +1,7 @@
-From c810058e5bad11b4f6418c6178651e987a6bc043 Mon Sep 17 00:00:00 2001
+From e5d26e0be93698fb99f81d2c6d472124a982a22d Mon Sep 17 00:00:00 2001
 From: Serge Hallyn <serge.hallyn@ubuntu.com>
 Date: Sat, 18 Apr 2015 23:51:03 -0500
-Subject: free d at program end
+Subject: [PATCH 2/2] free d at program end
 
 to silence warnings from memory checkers
 
@@ -10,10 +10,10 @@ Signed-off-by: Serge Hallyn <serge.hallyn@ubuntu.com>
  lxcfs.c | 3 ++-
  1 file changed, 2 insertions(+), 1 deletion(-)
 
-diff --git a/lxcfs.c b/lxcfs.c
-index e9c218e..96436f0 100644
---- a/lxcfs.c
-+++ b/lxcfs.c
+Index: lxcfs-0.7/lxcfs.c
+===================================================================
+--- lxcfs-0.7.orig/lxcfs.c
++++ lxcfs-0.7/lxcfs.c
 @@ -2393,7 +2393,7 @@ static bool is_help(char *w)
  int main(int argc, char *argv[])
  {

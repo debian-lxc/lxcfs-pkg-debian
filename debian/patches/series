@@ -1,3 +1,4 @@
 0001-LXC-hook-fixes.patch
 0002-Make-sure-that-that-cgroup-and-the-controller-are-se.patch
 0003-free-d-at-program-end.patch
+0004-Add-some-more-sanity-checks.patch

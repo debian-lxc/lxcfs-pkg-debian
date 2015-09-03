@@ -846,7 +846,9 @@ static void pid_to_ns_wrapper(int sock, pid_t tpid)
 	fd_set s;
 	char v;
 
-	sprintf(fnam, "/proc/%d/ns/pid", tpid);
+	ret = snprintf(fnam, sizeof(fnam), "/proc/%d/ns/pid", tpid);
+	if (ret < 0 || ret >= sizeof(fnam))
+		exit(1);
 	newnsfd = open(fnam, O_RDONLY);
 	if (newnsfd < 0)
 		exit(1);
@@ -1107,7 +1109,9 @@ static void pid_from_ns_wrapper(int sock, pid_t tpid)
 	struct timeval tv;
 	char v;
 
-	sprintf(fnam, "/proc/%d/ns/pid", tpid);
+	ret = snprintf(fnam, sizeof(fnam), "/proc/%d/ns/pid", tpid);
+	if (ret < 0 || ret >= sizeof(fnam))
+		exit(1);
 	newnsfd = open(fnam, O_RDONLY);
 	if (newnsfd < 0)
 		exit(1);
@@ -1857,7 +1861,10 @@ static long int get_pid1_time(pid_t pid)
 		return 0;
 	}
 
-	sprintf(fnam, "/proc/%d/ns/pid", pid);
+	ret = snprintf(fnam, sizeof(fnam), "/proc/%d/ns/pid", pid);
+	if (ret < 0 || ret >= sizeof(fnam))
+		return 0;
+
 	fd = open(fnam, O_RDONLY);
 	if (fd < 0) {
 		perror("get_pid1_time open of ns/pid");
@@ -2045,7 +2052,7 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 		size_t l;
 		char *printme, lbuf[256];
 
-		i = sscanf(line, "%u %u %s", &major, &minor, dev_name);
+		i = sscanf(line, "%u %u %71s", &major, &minor, dev_name);
 		if(i == 3){
 			get_blkio_io_value(io_serviced_str, major, minor, "Read", &read);
 			get_blkio_io_value(io_serviced_str, major, minor, "Write", &write);
@@ -2392,7 +2399,7 @@ static bool is_help(char *w)
 
 int main(int argc, char *argv[])
 {
-	int ret;
+	int ret = -1;
 	struct lxcfs_state *d = NULL;
 
 	if (argc < 2 || is_help(argv[1]))
@@ -2406,10 +2413,11 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "WARNING: failed to escape to root cgroup\n");
 
 	if (!cgm_get_controllers(&d->subsystems))
-		return -1;
+		goto out;
 
 	ret = fuse_main(argc, argv, &lxcfs_ops, d);
 
+out:
 	free(d);
 	return ret;
 }

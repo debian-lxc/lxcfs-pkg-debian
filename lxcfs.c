@@ -25,8 +25,10 @@
 #include <sys/mount.h>
 #include <wait.h>
 
+#include <nih-dbus/dbus_connection.h>
 #include <nih/alloc.h>
 #include <nih/string.h>
+#include <nih/error.h>
 
 #include "cgmanager.h"
 #include "config.h" // for VERSION
@@ -867,11 +869,11 @@ static void pid_to_ns(int sock, pid_t tpid)
 
 	while (recv_creds(sock, &cred, &v)) {
 		if (v == '1')
-			exit(0);
+			_exit(0);
 		if (write(sock, &cred.pid, sizeof(pid_t)) != sizeof(pid_t))
-			exit(1);
+			_exit(1);
 	}
-	exit(0);
+	_exit(0);
 }
 
 /*
@@ -891,21 +893,21 @@ static void pid_to_ns_wrapper(int sock, pid_t tpid)
 
 	ret = snprintf(fnam, sizeof(fnam), "/proc/%d/ns/pid", tpid);
 	if (ret < 0 || ret >= sizeof(fnam))
-		exit(1);
+		_exit(1);
 	newnsfd = open(fnam, O_RDONLY);
 	if (newnsfd < 0)
-		exit(1);
+		_exit(1);
 	if (setns(newnsfd, 0) < 0)
-		exit(1);
+		_exit(1);
 	close(newnsfd);
 
 	if (pipe(cpipe) < 0)
-		exit(1);
+		_exit(1);
 
 loop:
 	cpid = fork();
 	if (cpid < 0)
-		exit(1);
+		_exit(1);
 
 	if (!cpid) {
 		char b = '1';
@@ -932,8 +934,8 @@ loop:
 	}
 
 	if (!wait_for_pid(cpid))
-		exit(1);
-	exit(0);
+		_exit(1);
+	_exit(0);
 
 again:
 	kill(cpid, SIGKILL);
@@ -1113,12 +1115,12 @@ static void pid_from_ns(int sock, pid_t tpid)
 		if (ret <= 0) {
 			fprintf(stderr, "%s: bad select before read from parent: %s\n",
 				__func__, strerror(errno));
-			exit(1);
+			_exit(1);
 		}
 		if ((ret = read(sock, &vpid, sizeof(pid_t))) != sizeof(pid_t)) {
 			fprintf(stderr, "%s: bad read from parent: %s\n",
 				__func__, strerror(errno));
-			exit(1);
+			_exit(1);
 		}
 		if (vpid == -1) // done
 			break;
@@ -1128,10 +1130,10 @@ static void pid_from_ns(int sock, pid_t tpid)
 			v = '1';
 			cred.pid = getpid();
 			if (send_creds(sock, &cred, v, false) != SEND_CREDS_OK)
-				exit(1);
+				_exit(1);
 		}
 	}
-	exit(0);
+	_exit(0);
 }
 
 static void pid_from_ns_wrapper(int sock, pid_t tpid)
@@ -1145,22 +1147,22 @@ static void pid_from_ns_wrapper(int sock, pid_t tpid)
 
 	ret = snprintf(fnam, sizeof(fnam), "/proc/%d/ns/pid", tpid);
 	if (ret < 0 || ret >= sizeof(fnam))
-		exit(1);
+		_exit(1);
 	newnsfd = open(fnam, O_RDONLY);
 	if (newnsfd < 0)
-		exit(1);
+		_exit(1);
 	if (setns(newnsfd, 0) < 0)
-		exit(1);
+		_exit(1);
 	close(newnsfd);
 
 	if (pipe(cpipe) < 0)
-		exit(1);
+		_exit(1);
 
 loop:
 	cpid = fork();
 
 	if (cpid < 0)
-		exit(1);
+		_exit(1);
 
 	if (!cpid) {
 		char b = '1';
@@ -1188,8 +1190,8 @@ loop:
 	}
 
 	if (!wait_for_pid(cpid))
-		exit(1);
-	exit(0);
+		_exit(1);
+	_exit(0);
 
 again:
 	kill(cpid, SIGKILL);
@@ -1582,6 +1584,53 @@ out:
 	return answer;
 }
 
+static int read_file(const char *path, char *buf, size_t size,
+		     struct file_info *d)
+{
+	size_t linelen = 0, total_len = 0, rv = 0;
+	char *line = NULL;
+	char *cache = d->buf;
+	size_t cache_size = d->buflen;
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return 0;
+
+	while (getline(&line, &linelen, f) != -1) {
+		size_t l = snprintf(cache, cache_size, "%s", line);
+		if (l < 0) {
+			perror("Error writing to cache");
+			rv = 0;
+			goto err;
+		}
+		if (l >= cache_size) {
+			fprintf(stderr, "Internal error: truncated write to cache\n");
+			rv = 0;
+			goto err;
+		}
+		if (l < cache_size) {
+			cache += l;
+			cache_size -= l;
+			total_len += l;
+		} else {
+			cache += cache_size;
+			total_len += cache_size;
+			cache_size = 0;
+			break;
+		}
+	}
+
+	d->size = total_len;
+	if (total_len > size ) total_len = size;
+
+	/* read from off 0 */
+	memcpy(buf, d->buf, total_len);
+	rv = total_len;
+  err:
+	fclose(f);
+	free(line);
+	return rv;
+}
+
 /*
  * FUSE ops for /proc
  */
@@ -1610,7 +1659,7 @@ static int proc_meminfo_read(char *buf, size_t size, off_t offset,
 	}
 
 	if (!cg)
-		return 0;
+		return read_file("/proc/meminfo", buf, size, d);
 
 	if (!cgm_get_value("memory", cg, "memory.limit_in_bytes", &memlimit_str))
 		return 0;
@@ -1747,7 +1796,7 @@ static int proc_cpuinfo_read(char *buf, size_t size, off_t offset,
 	}
 
 	if (!cg)
-		return 0;
+		return read_file("proc/cpuinfo", buf, size, d);
 
 	cpuset = get_cpuset(cg);
 	if (!cpuset)
@@ -1854,7 +1903,7 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 	}
 
 	if (!cg)
-		return 0;
+		return read_file("/proc/stat", buf, size, d);
 
 	cpuset = get_cpuset(cg);
 	if (!cpuset)
@@ -2066,7 +2115,7 @@ loop:
 	}
 
 	wait_for_pid(cpid);
-	exit(0);
+	_exit(0);
 
 again:
 	kill(cpid, SIGKILL);
@@ -2091,7 +2140,7 @@ static long int getreaperage(pid_t qpid)
 		mtime = get_pid1_time(qpid);
 		if (write(mypipe[1], &mtime, sizeof(mtime)) != sizeof(mtime))
 			fprintf(stderr, "Warning: bad write from getreaperage\n");
-		exit(0);
+		_exit(0);
 	}
 
 	close(mypipe[1]);
@@ -2196,7 +2245,7 @@ static int proc_diskstats_read(char *buf, size_t size, off_t offset,
 	}
 
 	if (!cg)
-		return 0;
+		return read_file("/proc/diskstats", buf, size, d);
 
 	if (!cgm_get_value("blkio", cg, "blkio.io_serviced", &io_serviced_str))
 		return 0;
@@ -2652,6 +2701,15 @@ void swallow_option(int *argcp, char *argv[], char *opt, char *v)
 	}
 }
 
+bool detect_libnih_threadsafe(void)
+{
+#ifdef HAVE_NIH_THREADSAFE
+	if (nih_threadsafe())
+		return true;
+#endif
+	return false;
+}
+
 int main(int argc, char *argv[])
 {
 	int ret = -1;
@@ -2660,8 +2718,16 @@ int main(int argc, char *argv[])
 	 * what we pass to fuse_main is:
 	 * argv[0] -s -f -o allow_other,directio argv[1] NULL
 	 */
-#define NARGS 7
-	char *newargv[7];
+	int nargs = 6;
+	bool threadsafe = detect_libnih_threadsafe();
+	char *newargv[7]; // one more than if needed if threadsafe
+
+	threadsafe = false; // still not safe with libnih+libdbus
+
+	dbus_threads_init_default();
+
+	if (threadsafe)
+		nargs = 5;
 
 	/* accomodate older init scripts */
 	swallow_arg(&argc, argv, "-s");
@@ -2677,13 +2743,15 @@ int main(int argc, char *argv[])
 
 	d = NIH_MUST( malloc(sizeof(*d)) );
 
-	newargv[0] = argv[0];
-	newargv[1] = "-s";
-	newargv[2] = "-f";
-	newargv[3] = "-o";
-	newargv[4] = "allow_other,direct_io";
-	newargv[5] = argv[1];
-	newargv[6] = NULL;
+	int cnt = 0;
+	newargv[cnt++] = argv[0];
+	if (!threadsafe)
+		newargv[cnt++] = "-s";
+	newargv[cnt++] = "-f";
+	newargv[cnt++] = "-o";
+	newargv[cnt++] = "allow_other,direct_io";
+	newargv[cnt++] = argv[1];
+	newargv[cnt++] = NULL;
 
 	if (!cgm_escape_cgroup())
 		fprintf(stderr, "WARNING: failed to escape to root cgroup\n");
@@ -2691,7 +2759,7 @@ int main(int argc, char *argv[])
 	if (!cgm_get_controllers(&d->subsystems))
 		goto out;
 
-	ret = fuse_main(NARGS - 1, newargv, &lxcfs_ops, d);
+	ret = fuse_main(nargs, newargv, &lxcfs_ops, d);
 
 out:
 	free(d);

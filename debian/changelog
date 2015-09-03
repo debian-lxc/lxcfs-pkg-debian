@@ -1,3 +1,14 @@
+lxcfs (0.10-0ubuntu1) wily; urgency=medium
+
+  * New upstream bugfix release:
+    - Detect libnih threading support and use when available.
+    - Fix threading issues related to DBus.
+    - Handle missing memory cgroup.
+    - Turn off threading globally because of problems with libdbus.
+    - Tweak lxcfs mounts to better accomodate systemd.
+
+ -- Stéphane Graber <stgraber@ubuntu.com>  Thu, 03 Sep 2015 19:37:01 -0400
+
 lxcfs (0.9-0ubuntu3) wily; urgency=medium
 
   * Update the lxc mount hook to offer a mount per co-mounted controller.

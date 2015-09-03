@@ -1,0 +1,23 @@
+From 6d2f96d2b62572acfbde00b48e93c6f4ea9ea44b Mon Sep 17 00:00:00 2001
+From: Serge Hallyn <serge.hallyn@ubuntu.com>
+Date: Sat, 18 Apr 2015 23:03:45 -0500
+Subject: Make sure that that '/cgroup' and the controller are sep'd by /
+
+Signed-off-by: Serge Hallyn <serge.hallyn@ubuntu.com>
+---
+ lxcfs.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/lxcfs.c b/lxcfs.c
+index 67849d1..e9c218e 100644
+--- a/lxcfs.c
++++ b/lxcfs.c
+@@ -313,6 +313,8 @@ static char *pick_controller_from_path(struct fuse_context *fc, const char *path
+ 
+ 	if (strlen(path) < 9)
+ 		return NULL;
++	if (*(path+7) != '/')
++		return NULL;
+ 	p1 = path+8;
+ 	ret = nih_strdup(NULL, p1);
+ 	if (!ret)
